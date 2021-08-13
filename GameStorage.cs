@@ -152,6 +152,7 @@ namespace JtonNetwork.ServiceLayer
                             }
                             break;
                         default:
+                            Log.Error("OnStorage update currently doesn't support length of {length}!", key.Length);
                             break;
                     }
                 }
