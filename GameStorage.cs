@@ -3,6 +3,7 @@ using JtonNetwork.ServiceLayer.Storage;
 using Serilog;
 using SubstrateNetApi;
 using SubstrateNetApi.Model.Rpc;
+using SubstrateNetApi.Model.Meta;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -24,15 +25,22 @@ namespace JtonNetwork.ServiceLayer
         // 32 bytes in hex is 64 characters.
         private const int STORAGE_MAPS_STRING_LENGTH = STORAGE_VALUES_STRING_LENGTH + 64;
 
+        // Storage Double Maps   => xxhash128("ModuleName") + xxhash128("StorageName") + blake256hash("StorageItemKey1") + blake256hash("StorageItemKey2")
+        private const int STORAGE_DOUBLEMAPS_STRING_LENGTH = STORAGE_VALUES_STRING_LENGTH + 64 + 64;
+
         private readonly ManualResetEvent StorageStartProcessingEvent = new ManualResetEvent(false);
         private readonly object Lock = new object();
 
         private readonly Dictionary<string, string> StorageModuleDisplayNames = new Dictionary<string, string>();
         private readonly Dictionary<string, string> StorageModuleItemDisplayNames = new Dictionary<string, string>();
-        private readonly Dictionary<string, Tuple<object, MethodInfo>> StorageMapValueChangeListener = new Dictionary<string, Tuple<object, MethodInfo>>();
-        private readonly Dictionary<string, Tuple<object, MethodInfo>> StorageValueChangeListener = new Dictionary<string, Tuple<object, MethodInfo>>();
+        private readonly Dictionary<string, Tuple<object, MethodInfo>> StorageChangeListener = new Dictionary<string, Tuple<object, MethodInfo>>();
 
         private List<IStorage> Storages = new List<IStorage>();
+
+
+        private SubstrateNetApi.Model.Meta.Storage.Type StorageType { get; set; }
+        private int StorageItemKey1Size { get; set; }
+        private int StorageItemKey2Size { get; set; }
 
         internal IStorage GetStorage<T>()
         {
@@ -52,8 +60,7 @@ namespace JtonNetwork.ServiceLayer
             Storages = storages;
 
             InitializeMetadataDisplayNames(client);
-            InitializeStorageMapValueChangeListener();
-            InitializeStorageValueChangeListener();
+            InitializeStorageChangeListener();
 
             foreach (var storage in Storages)
             {
@@ -61,33 +68,17 @@ namespace JtonNetwork.ServiceLayer
             }
         }
 
-        private void InitializeStorageMapValueChangeListener()
+        private void InitializeStorageChangeListener()
         {
             foreach (var storage in Storages)
             {
                 foreach (var method in storage.GetType().GetMethods())
                 {
-                    var attributes = method.GetCustomAttributes(typeof(StorageMapChangeAttribute), true);
+                    var attributes = method.GetCustomAttributes(typeof(StorageChangeAttribute), true);
                     foreach (var attribute in attributes)
                     {
-                        var listenerMethod = attribute as StorageMapChangeAttribute;
-                        StorageMapValueChangeListener.Add(listenerMethod.Key, new Tuple<object, MethodInfo>(storage, method));
-                    }
-                }
-            }
-        }
-
-        private void InitializeStorageValueChangeListener()
-        {
-            foreach (var storage in Storages)
-            {
-                foreach (var method in storage.GetType().GetMethods())
-                {
-                    var attributes = method.GetCustomAttributes(typeof(StorageValueChangeAttribute), true);
-                    foreach (var attribute in attributes)
-                    {
-                        var listenerMethod = attribute as StorageValueChangeAttribute;
-                        StorageValueChangeListener.Add(listenerMethod.Key, new Tuple<object, MethodInfo>(storage, method));
+                        var listenerMethod = attribute as StorageChangeAttribute;
+                        StorageChangeListener.Add(listenerMethod.Key, new Tuple<object, MethodInfo>(storage, method));
                     }
                 }
             }
@@ -102,6 +93,10 @@ namespace JtonNetwork.ServiceLayer
 
                 foreach (var storageItem in module.Storage.Items)
                 {
+                    StorageType = storageItem.Type;
+                    StorageItemKey1Size = ByteSizeOfKeyByHasher(storageItem.Function.Hasher);
+                    StorageItemKey2Size = ByteSizeOfKeyByHasher(storageItem.Function.Key2Hasher);
+
                     var key = Utils.Bytes2HexString(RequestGenerator.GetStorageKeyBytesHash(module, storageItem)).ToLower();
                     var moduleNameHash = $"0x{key.Substring(2, 32)}";
                     var storageItemNameHash = $"0x{key.Substring(34, 32)}";
@@ -122,6 +117,36 @@ namespace JtonNetwork.ServiceLayer
             Log.Information("loaded storage metadata module item names {count}", StorageModuleItemDisplayNames.Count);
         }
 
+        /// <summary>
+        /// This should be moved to the SubstrateNetApi to avoid a dependency on that enum
+        /// </summary>
+        /// <param name="hasher"></param>
+        /// <returns></returns>
+        private int ByteSizeOfKeyByHasher(SubstrateNetApi.Model.Meta.Storage.Hasher hasher)
+        {
+            switch (hasher)
+            {
+                case SubstrateNetApi.Model.Meta.Storage.Hasher.None:
+                    return 0;
+                case SubstrateNetApi.Model.Meta.Storage.Hasher.BlakeTwo128:
+                    return 32;
+                case SubstrateNetApi.Model.Meta.Storage.Hasher.BlakeTwo256:
+                    return 64;
+                case SubstrateNetApi.Model.Meta.Storage.Hasher.BlakeTwo128Concat:
+                    return 32;
+                case SubstrateNetApi.Model.Meta.Storage.Hasher.Twox128:
+                    return 64;
+                case SubstrateNetApi.Model.Meta.Storage.Hasher.Twox256:
+                    return 128;
+                case SubstrateNetApi.Model.Meta.Storage.Hasher.Twox64Concat:
+                    return 32;
+                case SubstrateNetApi.Model.Meta.Storage.Hasher.Identity:
+                    return -1;
+                default:
+                    return -1;
+            }
+        }
+
         internal void OnStorageUpdate(string id, StorageChangeSet changes)
         {
             lock (Lock)
@@ -136,27 +161,39 @@ namespace JtonNetwork.ServiceLayer
                     // The key starts with 0x prefix.
                     var key = change[0].ToLower();
 
-                    switch (key.Length)
+                    // [0x][Hash128(ModuleName)][Hash128(StorageName)]
+                    var moduleNameHash = $"0x{key.Substring(2, 32)}";
+                    var storageItemNameHash = $"0x{key.Substring(34, 32)}";
+
+                    switch (StorageType)
                     {
-                        // [0x][Hash128(ModuleName)][Hash128(StorageName)]
-                        case STORAGE_VALUES_STRING_LENGTH:
-                            {
-                                var moduleNameHash = $"0x{key.Substring(2, 32)}";
-                                var storageItemNameHash = $"0x{key.Substring(34, 32)}";
-                                ProcessStorageValueChange(moduleNameHash, storageItemNameHash, change[1]);
-                            }
+                        case SubstrateNetApi.Model.Meta.Storage.Type.Plain:
+                            ProcessStorageChange(moduleNameHash, storageItemNameHash, new string[] { }, change[1]);
                             break;
 
-                        // [0x][Hash128(ModuleName)][Hash128(StorageName)][Hash256(StorageItemKey)]
-                        case STORAGE_MAPS_STRING_LENGTH:
+                        case SubstrateNetApi.Model.Meta.Storage.Type.Map:
+                            var storageItemKeyHash = "[Unknown]";
+                            if (StorageItemKey1Size > 0)
                             {
-                                var moduleNameHash = $"0x{key.Substring(2, 32)}";
-                                var storageItemNameHash = $"0x{key.Substring(34, 32)}";
-                                var storageItemKeyHash = key.Substring(66, 64);
-                                ProcessStorageMapValueChange(moduleNameHash, storageItemNameHash, storageItemKeyHash, change[1]);
+                                storageItemKeyHash = key.Substring(66, StorageItemKey1Size);
                             }
+                            ProcessStorageChange(moduleNameHash, storageItemNameHash, new string[] { storageItemKeyHash }, change[1]);
                             break;
+
+                        case SubstrateNetApi.Model.Meta.Storage.Type.DoubleMap:
+                            var storageItemKeyHash1 = "[Unknown]";
+                            var storageItemKeyHash2 = "[Unknown]";
+                            if (StorageItemKey1Size > 0 && StorageItemKey2Size > 0)
+                            {
+                                storageItemKeyHash1 = key.Substring(66, StorageItemKey1Size);
+                                storageItemKeyHash2 = key.Substring(66 + StorageItemKey1Size, StorageItemKey2Size);
+                            }
+
+                            ProcessStorageChange(moduleNameHash, storageItemNameHash, new string[] { storageItemKeyHash1, storageItemKeyHash2 }, change[1]);
+                            break;
+
                         default:
+                            Log.Debug("OnStorage update currently doesn't support {type}!", StorageType);
                             break;
                     }
                 }
@@ -168,7 +205,7 @@ namespace JtonNetwork.ServiceLayer
             StorageStartProcessingEvent.Set();
         }
 
-        private void ProcessStorageMapValueChange(string moduleNameHash, string storageItemNameHash, string storageItemKeyHash, string data)
+        private void ProcessStorageChange(string moduleNameHash, string storageItemNameHash, string[] storageItemKeys, string data)
         {
             var module = GetModuleDisplayName(moduleNameHash);
             if (string.IsNullOrEmpty(module))
@@ -179,28 +216,27 @@ namespace JtonNetwork.ServiceLayer
                 return;
 
             var key = $"{module}.{storageItem}";
-            if (StorageMapValueChangeListener.ContainsKey(key))
+            if (StorageChangeListener.ContainsKey(key))
             {
-                var listener = StorageMapValueChangeListener[key];
-                listener.Item2.Invoke(listener.Item1, new[] { storageItemKeyHash, data });
-            }
-        }
+                var listener = StorageChangeListener[key];
 
-        private void ProcessStorageValueChange(string moduleNameHash, string storageItemNameHash, string data)
-        {
-            var module = GetModuleDisplayName(moduleNameHash);
-            if (string.IsNullOrEmpty(module))
-                return;
-
-            var storageItem = GetStorageItemDisplayName(storageItemNameHash);
-            if (string.IsNullOrEmpty(storageItem))
-                return;
-
-            var key = $"{module}.{storageItem}";
-            if (StorageValueChangeListener.ContainsKey(key))
-            {
-                var listener = StorageMapValueChangeListener[key];
-                listener.Item2.Invoke(listener.Item1, new[] { data });
+                string[] parameters = new string[storageItemKeys.Length + 1];
+                parameters[parameters.Length - 1] = data;
+                switch (storageItemKeys.Length)
+                {
+                    case 0: 
+                        break;
+                    case 1:
+                        parameters[0] = storageItemKeys[0];
+                        break;
+                    case 2:
+                        parameters[1] = storageItemKeys[1];
+                        break;
+                    default:
+                        throw new NotImplementedException("To many storage keys, in array!");
+                }
+                
+                listener.Item2.Invoke(listener.Item1, parameters);
             }
         }
 
