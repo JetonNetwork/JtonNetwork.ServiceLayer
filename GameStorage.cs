@@ -32,9 +32,7 @@ namespace JtonNetwork.ServiceLayer
 
         private readonly Dictionary<string, string> StorageModuleDisplayNames = new Dictionary<string, string>();
         private readonly Dictionary<string, string> StorageModuleItemDisplayNames = new Dictionary<string, string>();
-        private readonly Dictionary<string, Tuple<object, MethodInfo>> StorageDoubleMapValueChangeListener = new Dictionary<string, Tuple<object, MethodInfo>>();
-        private readonly Dictionary<string, Tuple<object, MethodInfo>> StorageMapValueChangeListener = new Dictionary<string, Tuple<object, MethodInfo>>();
-        private readonly Dictionary<string, Tuple<object, MethodInfo>> StorageValueChangeListener = new Dictionary<string, Tuple<object, MethodInfo>>();
+        private readonly Dictionary<string, Tuple<object, MethodInfo>> StorageChangeListener = new Dictionary<string, Tuple<object, MethodInfo>>();
 
         private List<IStorage> Storages = new List<IStorage>();
 
@@ -56,9 +54,7 @@ namespace JtonNetwork.ServiceLayer
             Storages = storages;
 
             InitializeMetadataDisplayNames(client);
-            InitializeStorageDoubleMapValueChangeListener();
-            InitializeStorageMapValueChangeListener();
-            InitializeStorageValueChangeListener();
+            InitializeStorageChangeListener();
 
             foreach (var storage in Storages)
             {
@@ -66,49 +62,17 @@ namespace JtonNetwork.ServiceLayer
             }
         }
 
-        private void InitializeStorageDoubleMapValueChangeListener()
+        private void InitializeStorageChangeListener()
         {
             foreach (var storage in Storages)
             {
                 foreach (var method in storage.GetType().GetMethods())
                 {
-                    var attributes = method.GetCustomAttributes(typeof(StorageDoubleMapChangeAttribute), true);
+                    var attributes = method.GetCustomAttributes(typeof(StorageChangeAttribute), true);
                     foreach (var attribute in attributes)
                     {
-                        var listenerMethod = attribute as StorageDoubleMapChangeAttribute;
-                        StorageDoubleMapValueChangeListener.Add(listenerMethod.Key, new Tuple<object, MethodInfo>(storage, method));
-                    }
-                }
-            }
-        }
-
-        private void InitializeStorageMapValueChangeListener()
-        {
-            foreach (var storage in Storages)
-            {
-                foreach (var method in storage.GetType().GetMethods())
-                {
-                    var attributes = method.GetCustomAttributes(typeof(StorageMapChangeAttribute), true);
-                    foreach (var attribute in attributes)
-                    {
-                        var listenerMethod = attribute as StorageMapChangeAttribute;
-                        StorageMapValueChangeListener.Add(listenerMethod.Key, new Tuple<object, MethodInfo>(storage, method));
-                    }
-                }
-            }
-        }
-
-        private void InitializeStorageValueChangeListener()
-        {
-            foreach (var storage in Storages)
-            {
-                foreach (var method in storage.GetType().GetMethods())
-                {
-                    var attributes = method.GetCustomAttributes(typeof(StorageValueChangeAttribute), true);
-                    foreach (var attribute in attributes)
-                    {
-                        var listenerMethod = attribute as StorageValueChangeAttribute;
-                        StorageValueChangeListener.Add(listenerMethod.Key, new Tuple<object, MethodInfo>(storage, method));
+                        var listenerMethod = attribute as StorageChangeAttribute;
+                        StorageChangeListener.Add(listenerMethod.Key, new Tuple<object, MethodInfo>(storage, method));
                     }
                 }
             }
@@ -164,7 +128,7 @@ namespace JtonNetwork.ServiceLayer
                             {
                                 var moduleNameHash = $"0x{key.Substring(2, 32)}";
                                 var storageItemNameHash = $"0x{key.Substring(34, 32)}";
-                                ProcessStorageValueChange(moduleNameHash, storageItemNameHash, change[1]);
+                                ProcessStorageChange(moduleNameHash, storageItemNameHash, new string[] { }, change[1]);
                             }
                             break;
 
@@ -174,7 +138,7 @@ namespace JtonNetwork.ServiceLayer
                                 var moduleNameHash = $"0x{key.Substring(2, 32)}";
                                 var storageItemNameHash = $"0x{key.Substring(34, 32)}";
                                 var storageItemKeyHash = key.Substring(66, 64);
-                                ProcessStorageMapValueChange(moduleNameHash, storageItemNameHash, storageItemKeyHash, change[1]);
+                                ProcessStorageChange(moduleNameHash, storageItemNameHash, new string[] { storageItemKeyHash }, change[1]);
                             }
                             break;
                         // [0x][Hash128(ModuleName)][Hash128(StorageName)][Hash256(StorageItemKey1)][Hash256(StorageItemKey2)]
@@ -184,7 +148,7 @@ namespace JtonNetwork.ServiceLayer
                                 var storageItemNameHash = $"0x{key.Substring(34, 32)}";
                                 var storageItemKeyHash1 = key.Substring(66, 64);
                                 var storageItemKeyHash2 = key.Substring(130, 64);
-                                ProcessStorageDoubleMapValueChange(moduleNameHash, storageItemNameHash, storageItemKeyHash1, storageItemKeyHash2, change[1]);
+                                ProcessStorageChange(moduleNameHash, storageItemNameHash, new string[] { storageItemKeyHash1, storageItemKeyHash2 }, change[1]);
                             }
                             break;
                         default:
@@ -199,7 +163,7 @@ namespace JtonNetwork.ServiceLayer
             StorageStartProcessingEvent.Set();
         }
 
-        private void ProcessStorageDoubleMapValueChange(string moduleNameHash, string storageItemNameHash, string storageItemKeyHash1, string storageItemKeyHash2, string data)
+        private void ProcessStorageChange(string moduleNameHash, string storageItemNameHash, string[] storageItemKeys, string data)
         {
             var module = GetModuleDisplayName(moduleNameHash);
             if (string.IsNullOrEmpty(module))
@@ -210,46 +174,27 @@ namespace JtonNetwork.ServiceLayer
                 return;
 
             var key = $"{module}.{storageItem}";
-            if (StorageMapValueChangeListener.ContainsKey(key))
+            if (StorageChangeListener.ContainsKey(key))
             {
-                var listener = StorageDoubleMapValueChangeListener[key];
-                listener.Item2.Invoke(listener.Item1, new[] { storageItemKeyHash1, storageItemKeyHash2, data });
-            }
-        }
+                var listener = StorageChangeListener[key];
 
-        private void ProcessStorageMapValueChange(string moduleNameHash, string storageItemNameHash, string storageItemKeyHash, string data)
-        {
-            var module = GetModuleDisplayName(moduleNameHash);
-            if (string.IsNullOrEmpty(module))
-                return;
-
-            var storageItem = GetStorageItemDisplayName(storageItemNameHash);
-            if (string.IsNullOrEmpty(storageItem))
-                return;
-
-            var key = $"{module}.{storageItem}";
-            if (StorageMapValueChangeListener.ContainsKey(key))
-            {
-                var listener = StorageMapValueChangeListener[key];
-                listener.Item2.Invoke(listener.Item1, new[] { storageItemKeyHash, data });
-            }
-        }
-
-        private void ProcessStorageValueChange(string moduleNameHash, string storageItemNameHash, string data)
-        {
-            var module = GetModuleDisplayName(moduleNameHash);
-            if (string.IsNullOrEmpty(module))
-                return;
-
-            var storageItem = GetStorageItemDisplayName(storageItemNameHash);
-            if (string.IsNullOrEmpty(storageItem))
-                return;
-
-            var key = $"{module}.{storageItem}";
-            if (StorageValueChangeListener.ContainsKey(key))
-            {
-                var listener = StorageMapValueChangeListener[key];
-                listener.Item2.Invoke(listener.Item1, new[] { data });
+                string[] parameters = new string[storageItemKeys.Length + 1];
+                parameters[parameters.Length - 1] = data;
+                switch (storageItemKeys.Length)
+                {
+                    case 0: 
+                        break;
+                    case 1:
+                        parameters[0] = storageItemKeys[0];
+                        break;
+                    case 2:
+                        parameters[1] = storageItemKeys[1];
+                        break;
+                    default:
+                        throw new NotImplementedException("To many storage keys, in array!");
+                }
+                
+                listener.Item2.Invoke(listener.Item1, parameters);
             }
         }
 
