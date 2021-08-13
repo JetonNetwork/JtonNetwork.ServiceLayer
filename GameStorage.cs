@@ -106,6 +106,7 @@ namespace JtonNetwork.ServiceLayer
                         // multiply with 2 for hexstring size from byte size
                         StorageItemKey2Size = 2 * ByteSizeOfKeyByHasher(storageItem.Function.Key2Hasher)
                     };
+                    Log.Debug($"ItemInfo[{itemInfo.StorageName}]: {itemInfo.StorageType} [{itemInfo.StorageItemKey1Size},{itemInfo.StorageItemKey2Size}]");
 
                     var key = Utils.Bytes2HexString(RequestGenerator.GetStorageKeyBytesHash(module, storageItem)).ToLower();
                     var moduleNameHash = $"0x{key.Substring(2, 32)}";
@@ -177,46 +178,76 @@ namespace JtonNetwork.ServiceLayer
 
                     if (!StorageModuleNames.TryGetValue(moduleNameHash, out string moduleName))
                     {
-                        Log.Error("Unable to find a module with moduleNameHash {hash}!", moduleNameHash);
+                        Log.Error($"Unable to find a module with moduleNameHash {moduleNameHash}!");
                         return;
                     }
 
                     if (!StorageModuleItemInfos.TryGetValue(storageItemNameHash, out ItemInfo itemInfo))
                     {
-                        Log.Error("Unable to find a storage with storageItemNameHash {hash}!", storageItemNameHash);
+                        Log.Error($"Unable to find a storage with storageItemNameHash {storageItemNameHash}!");
                         return;
                     }
 
-                    switch (itemInfo.StorageType)
+                    Log.Debug($"OnStorageUpdate {itemInfo.StorageName}!");
+
+                    switch (key.Length)
                     {
-                        case SubstrateNetApi.Model.Meta.Storage.Type.Plain:
-                            ProcessStorageChange(moduleName, itemInfo, new string[] { }, change[1]);
-                            break;
-
-                        case SubstrateNetApi.Model.Meta.Storage.Type.Map:
-                            var storageItemKeyHash = "[Unknown]";
-                            if (itemInfo.StorageItemKey1Size > 0)
+                        // [0x][Hash128(ModuleName)][Hash128(StorageName)]
+                        case STORAGE_VALUES_STRING_LENGTH:
                             {
-                                storageItemKeyHash = key.Substring(66, 64);
+                                ProcessStorageChange(moduleNameHash, itemInfo, new string[] { }, change[1]);
                             }
-                            ProcessStorageChange(moduleName, itemInfo, new string[] { storageItemKeyHash }, change[1]);
                             break;
 
-                        case SubstrateNetApi.Model.Meta.Storage.Type.DoubleMap:
-                            var storageItemKeyHash1 = "[Unknown]";
-                            var storageItemKeyHash2 = "[Unknown]";
-                            if (itemInfo.StorageItemKey1Size > 0 && itemInfo.StorageItemKey2Size > 0)
+                        // [0x][Hash128(ModuleName)][Hash128(StorageName)][Hash256(StorageItemKey)]
+                        case STORAGE_MAPS_STRING_LENGTH:
                             {
-                                storageItemKeyHash1 = key.Substring(66, itemInfo.StorageItemKey1Size);
-                                storageItemKeyHash2 = key.Substring(66 + itemInfo.StorageItemKey1Size, itemInfo.StorageItemKey2Size);
+                                var storageItemKeyHash = key.Substring(66, 64);
+                                ProcessStorageChange(moduleNameHash, itemInfo, new string[] { storageItemKeyHash }, change[1]);
                             }
-                            ProcessStorageChange(moduleName, itemInfo, new string[] { storageItemKeyHash1, storageItemKeyHash2 }, change[1]);
                             break;
-
+                        // [0x][Hash128(ModuleName)][Hash128(StorageName)][Hash256(StorageItemKey1)][Hash256(StorageItemKey2)]
+                        case STORAGE_DOUBLEMAPS_STRING_LENGTH:
+                            {
+                                var storageItemKeyHash1 = key.Substring(66, 64);
+                                var storageItemKeyHash2 = key.Substring(130, 64);
+                                ProcessStorageChange(moduleNameHash, itemInfo, new string[] { storageItemKeyHash1, storageItemKeyHash2 }, change[1]);
+                            }
+                            break;
                         default:
-                            Log.Debug("OnStorage update currently doesn't support {type}!", itemInfo.StorageType);
+                            Log.Error("OnStorage update currently doesn't support length of {length}!", key.Length);
                             break;
                     }
+                    //switch (itemInfo.StorageType)
+                    //{
+                    //    case SubstrateNetApi.Model.Meta.Storage.Type.Plain:
+                    //        ProcessStorageChange(moduleName, itemInfo, new string[] { }, change[1]);
+                    //        break;
+
+                    //    case SubstrateNetApi.Model.Meta.Storage.Type.Map:
+                    //        var storageItemKeyHash = "[Unknown]";
+                    //        if (itemInfo.StorageItemKey1Size > 0)
+                    //        {
+                    //            storageItemKeyHash = key.Substring(66, 64);
+                    //        }
+                    //        ProcessStorageChange(moduleName, itemInfo, new string[] { storageItemKeyHash }, change[1]);
+                    //        break;
+
+                    //    case SubstrateNetApi.Model.Meta.Storage.Type.DoubleMap:
+                    //        var storageItemKeyHash1 = "[Unknown]";
+                    //        var storageItemKeyHash2 = "[Unknown]";
+                    //        if (itemInfo.StorageItemKey1Size > 0 && itemInfo.StorageItemKey2Size > 0)
+                    //        {
+                    //            storageItemKeyHash1 = key.Substring(66, itemInfo.StorageItemKey1Size);
+                    //            storageItemKeyHash2 = key.Substring(66 + itemInfo.StorageItemKey1Size, itemInfo.StorageItemKey2Size);
+                    //        }
+                    //        ProcessStorageChange(moduleName, itemInfo, new string[] { storageItemKeyHash1, storageItemKeyHash2 }, change[1]);
+                    //        break;
+
+                    //    default:
+                    //        Log.Debug("OnStorage update currently doesn't support {type}!", itemInfo.StorageType);
+                    //        break;
+                    //}
                 }
             }
         }
