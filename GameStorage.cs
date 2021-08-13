@@ -94,8 +94,10 @@ namespace JtonNetwork.ServiceLayer
                 foreach (var storageItem in module.Storage.Items)
                 {
                     StorageType = storageItem.Type;
-                    StorageItemKey1Size = ByteSizeOfKeyByHasher(storageItem.Function.Hasher);
-                    StorageItemKey2Size = ByteSizeOfKeyByHasher(storageItem.Function.Key2Hasher);
+
+                    // multiply with 2 for hexstring size from byte size
+                    StorageItemKey1Size = 2 * ByteSizeOfKeyByHasher(storageItem.Function.Hasher);
+                    StorageItemKey2Size = 2 * ByteSizeOfKeyByHasher(storageItem.Function.Key2Hasher);
 
                     var key = Utils.Bytes2HexString(RequestGenerator.GetStorageKeyBytesHash(module, storageItem)).ToLower();
                     var moduleNameHash = $"0x{key.Substring(2, 32)}";
@@ -172,11 +174,11 @@ namespace JtonNetwork.ServiceLayer
                             break;
 
                         case SubstrateNetApi.Model.Meta.Storage.Type.Map:
-                            var storageItemKeyHash = "[Unknown]";
-                            if (StorageItemKey1Size > 0)
-                            {
-                                storageItemKeyHash = key.Substring(66, StorageItemKey1Size);
-                            }
+                            //var storageItemKeyHash = "[Unknown]";
+                            //if (StorageItemKey1Size > 0)
+                            //{
+                                var storageItemKeyHash = key.Substring(66, 64);
+                            //}
                             ProcessStorageChange(moduleNameHash, storageItemNameHash, new string[] { storageItemKeyHash }, change[1]);
                             break;
 
