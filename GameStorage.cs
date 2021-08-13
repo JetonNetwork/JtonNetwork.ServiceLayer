@@ -24,11 +24,15 @@ namespace JtonNetwork.ServiceLayer
         // 32 bytes in hex is 64 characters.
         private const int STORAGE_MAPS_STRING_LENGTH = STORAGE_VALUES_STRING_LENGTH + 64;
 
+        // Storage Double Maps   => xxhash128("ModuleName") + xxhash128("StorageName") + blake256hash("StorageItemKey1") + blake256hash("StorageItemKey2")
+        private const int STORAGE_DOUBLEMAPS_STRING_LENGTH = STORAGE_VALUES_STRING_LENGTH + 64 + 64;
+
         private readonly ManualResetEvent StorageStartProcessingEvent = new ManualResetEvent(false);
         private readonly object Lock = new object();
 
         private readonly Dictionary<string, string> StorageModuleDisplayNames = new Dictionary<string, string>();
         private readonly Dictionary<string, string> StorageModuleItemDisplayNames = new Dictionary<string, string>();
+        private readonly Dictionary<string, Tuple<object, MethodInfo>> StorageDoubleMapValueChangeListener = new Dictionary<string, Tuple<object, MethodInfo>>();
         private readonly Dictionary<string, Tuple<object, MethodInfo>> StorageMapValueChangeListener = new Dictionary<string, Tuple<object, MethodInfo>>();
         private readonly Dictionary<string, Tuple<object, MethodInfo>> StorageValueChangeListener = new Dictionary<string, Tuple<object, MethodInfo>>();
 
@@ -52,12 +56,29 @@ namespace JtonNetwork.ServiceLayer
             Storages = storages;
 
             InitializeMetadataDisplayNames(client);
+            InitializeStorageDoubleMapValueChangeListener();
             InitializeStorageMapValueChangeListener();
             InitializeStorageValueChangeListener();
 
             foreach (var storage in Storages)
             {
                 await storage.InitializeAsync(client);
+            }
+        }
+
+        private void InitializeStorageDoubleMapValueChangeListener()
+        {
+            foreach (var storage in Storages)
+            {
+                foreach (var method in storage.GetType().GetMethods())
+                {
+                    var attributes = method.GetCustomAttributes(typeof(StorageDoubleMapChangeAttribute), true);
+                    foreach (var attribute in attributes)
+                    {
+                        var listenerMethod = attribute as StorageDoubleMapChangeAttribute;
+                        StorageDoubleMapValueChangeListener.Add(listenerMethod.Key, new Tuple<object, MethodInfo>(storage, method));
+                    }
+                }
             }
         }
 
@@ -156,6 +177,16 @@ namespace JtonNetwork.ServiceLayer
                                 ProcessStorageMapValueChange(moduleNameHash, storageItemNameHash, storageItemKeyHash, change[1]);
                             }
                             break;
+                        // [0x][Hash128(ModuleName)][Hash128(StorageName)][Hash256(StorageItemKey1)][Hash256(StorageItemKey2)]
+                        case STORAGE_DOUBLEMAPS_STRING_LENGTH:
+                            {
+                                var moduleNameHash = $"0x{key.Substring(2, 32)}";
+                                var storageItemNameHash = $"0x{key.Substring(34, 32)}";
+                                var storageItemKeyHash1 = key.Substring(66, 64);
+                                var storageItemKeyHash2 = key.Substring(130, 64);
+                                ProcessStorageDoubleMapValueChange(moduleNameHash, storageItemNameHash, storageItemKeyHash1, storageItemKeyHash2, change[1]);
+                            }
+                            break;
                         default:
                             break;
                     }
@@ -166,6 +197,24 @@ namespace JtonNetwork.ServiceLayer
         internal void StartProcessingChanges()
         {
             StorageStartProcessingEvent.Set();
+        }
+
+        private void ProcessStorageDoubleMapValueChange(string moduleNameHash, string storageItemNameHash, string storageItemKeyHash1, string storageItemKeyHash2, string data)
+        {
+            var module = GetModuleDisplayName(moduleNameHash);
+            if (string.IsNullOrEmpty(module))
+                return;
+
+            var storageItem = GetStorageItemDisplayName(storageItemNameHash);
+            if (string.IsNullOrEmpty(storageItem))
+                return;
+
+            var key = $"{module}.{storageItem}";
+            if (StorageMapValueChangeListener.ContainsKey(key))
+            {
+                var listener = StorageDoubleMapValueChangeListener[key];
+                listener.Item2.Invoke(listener.Item1, new[] { storageItemKeyHash1, storageItemKeyHash2, data });
+            }
         }
 
         private void ProcessStorageMapValueChange(string moduleNameHash, string storageItemNameHash, string storageItemKeyHash, string data)
