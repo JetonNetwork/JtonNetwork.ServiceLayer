@@ -4,8 +4,11 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <PackageId>JtonNetwork.ServiceLayer</PackageId>
     <Version>0.0.3</Version>
+    <Company>BloGa Tech AG</Company>
     <Authors>svnscha</Authors>
     <PackageDescription>Service layer module to easily implement substrate storage services.</PackageDescription>
+    <PackageProjectUrl>https://github.com/JetonNetwork/JtonNetwork.ServiceLayer</PackageProjectUrl>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <RepositoryUrl>https://github.com/JetonNetwork/JtonNetwork.ServiceLayer</RepositoryUrl>
   </PropertyGroup>
 
