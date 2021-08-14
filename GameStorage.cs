@@ -203,32 +203,25 @@ namespace JtonNetwork.ServiceLayer
 
                         case SubstrateNetApi.Model.Meta.Storage.Type.Map:
                             {
-                                var key1Size = StringSizeOfKeyByHasher(itemInfo.StorageItemKey1Hasher);
-                                if (key1Size > 0)
-                                {
-                                    var storageItemKeyHash = key.Substring(66, key1Size);
-                                    ProcessStorageChange(moduleName, itemInfo, new string[] { storageItemKeyHash }, change[1]);
-                                }
-                                else
-                                {
-                                    Log.Debug("Not able to decode {name} with hasher {itemInfo.StorageItemKey1Hasher}", itemInfo.StorageName, key.Length, 66 + key1Size);
-                                }
+                                // even not knowing the keysize it's just the left part.
+                                var storageItemKeyHash = key.Substring(66);
+                                ProcessStorageChange(moduleName, itemInfo, new string[] { storageItemKeyHash }, change[1]);
                                 break;
                             }
 
                         case SubstrateNetApi.Model.Meta.Storage.Type.DoubleMap:
                             {
+                                // Currently we can't handle Identity as first Key, as we have no information about the size of the key.
                                 var key1Size = StringSizeOfKeyByHasher(itemInfo.StorageItemKey1Hasher);
-                                var key2Size = StringSizeOfKeyByHasher(itemInfo.StorageItemKey2Hasher);
-                                if (key1Size > 0 && key2Size > 0)
+                                if (key1Size > 0)
                                 {
                                     var storageItemKeyHash1 = key.Substring(66, key1Size);
-                                    var storageItemKeyHash2 = key.Substring(66 + key1Size, key2Size);
+                                    var storageItemKeyHash2 = key.Substring(66 + key1Size);
                                     ProcessStorageChange(moduleName, itemInfo, new string[] { storageItemKeyHash1, storageItemKeyHash2 }, change[1]);
                                 }
                                 else
                                 {
-                                    Log.Debug("Not able to decode {name} with hasher {itemInfo.StorageItemKey1Hasher}", itemInfo.StorageName, key.Length, 66 + key1Size);
+                                    Log.Debug("Not able to decode {type} {name} with hasher {hasher}", itemInfo.StorageType, itemInfo.StorageName, key.Length, 66 + key1Size);
                                 }
                                 break;
                             }
