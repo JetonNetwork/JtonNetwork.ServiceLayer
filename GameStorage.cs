@@ -11,23 +11,13 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Hasher = SubstrateNetApi.Model.Meta.Storage.Hasher;
+using StorageType = SubstrateNetApi.Model.Meta.Storage.Type;
+
 namespace JtonNetwork.ServiceLayer
 {
     internal class GameStorage
     {
-        // Storage Values => xxhash128("ModuleName") + xxhash128("StorageName")
-        // 128 bits = 16 bytes
-        // 16 bytes in hex is 32 characters.
-        private const int STORAGE_VALUES_STRING_LENGTH = 2 + 32 * 2;
-
-        // Storage Maps   => xxhash128("ModuleName") + xxhash128("StorageName") + blake256hash("StorageItemKey")
-        // 256 bits = 32 bytes
-        // 32 bytes in hex is 64 characters.
-        private const int STORAGE_MAPS_STRING_LENGTH = STORAGE_VALUES_STRING_LENGTH + 64;
-
-        // Storage Double Maps   => xxhash128("ModuleName") + xxhash128("StorageName") + blake256hash("StorageItemKey1") + blake256hash("StorageItemKey2")
-        private const int STORAGE_DOUBLEMAPS_STRING_LENGTH = STORAGE_VALUES_STRING_LENGTH + 64 + 64;
-
         private readonly ManualResetEvent StorageStartProcessingEvent = new ManualResetEvent(false);
         private readonly object Lock = new object();
 
@@ -41,9 +31,9 @@ namespace JtonNetwork.ServiceLayer
         struct ItemInfo
         {
             public string StorageName;
-            public SubstrateNetApi.Model.Meta.Storage.Type StorageType;
-            public SubstrateNetApi.Model.Meta.Storage.Hasher StorageItemKey1Hasher;
-            public SubstrateNetApi.Model.Meta.Storage.Hasher StorageItemKey2Hasher;
+            public StorageType StorageType;
+            public Hasher StorageItemKey1Hasher;
+            public Hasher StorageItemKey2Hasher;
         }
 
         internal IStorage GetStorage<T>()
@@ -134,21 +124,21 @@ namespace JtonNetwork.ServiceLayer
         {
             switch (hasher)
             {
-                case SubstrateNetApi.Model.Meta.Storage.Hasher.None:
+                case Hasher.None:
                     return 0;
-                case SubstrateNetApi.Model.Meta.Storage.Hasher.BlakeTwo128:
+                case Hasher.BlakeTwo128:
                     return 32;
-                case SubstrateNetApi.Model.Meta.Storage.Hasher.BlakeTwo256:
+                case Hasher.BlakeTwo256:
                     return 64;
-                case SubstrateNetApi.Model.Meta.Storage.Hasher.BlakeTwo128Concat:
+                case Hasher.BlakeTwo128Concat:
                     return 32;
-                case SubstrateNetApi.Model.Meta.Storage.Hasher.Twox128:
+                case Hasher.Twox128:
                     return 32;
-                case SubstrateNetApi.Model.Meta.Storage.Hasher.Twox256:
+                case Hasher.Twox256:
                     return 64;
-                case SubstrateNetApi.Model.Meta.Storage.Hasher.Twox64Concat:
+                case Hasher.Twox64Concat:
                     return 16;
-                case SubstrateNetApi.Model.Meta.Storage.Hasher.Identity:
+                case Hasher.Identity:
                     return 0;
                 default:
                     return 0;
@@ -195,23 +185,32 @@ namespace JtonNetwork.ServiceLayer
 
                     switch (itemInfo.StorageType)
                     {
-                        case SubstrateNetApi.Model.Meta.Storage.Type.Plain:
+                        case StorageType.Plain:
                             {
                                 ProcessStorageChange(moduleName, itemInfo, new string[] { }, change[1]);
                                 break;
                             }
 
-                        case SubstrateNetApi.Model.Meta.Storage.Type.Map:
+                        case StorageType.Map:
                             {
                                 // even not knowing the keysize it's just the left part.
+                                string[] keyParts  = GetKeyParts(key.Substring(66), new Hasher[] { itemInfo.StorageItemKey1Hasher });
+                                
                                 var storageItemKeyHash = key.Substring(66);
+
                                 ProcessStorageChange(moduleName, itemInfo, new string[] { storageItemKeyHash }, change[1]);
                                 break;
                             }
 
-                        case SubstrateNetApi.Model.Meta.Storage.Type.DoubleMap:
+                        case StorageType.DoubleMap:
                             {
                                 // Currently we can't handle Identity as first Key, as we have no information about the size of the key.
+                                string[] keyParts = GetKeyParts(key.Substring(66), new Hasher[] { itemInfo.StorageItemKey1Hasher, itemInfo.StorageItemKey2Hasher });
+                                
+                                
+                                ////////////////////////////////////////////////////TODO
+
+
                                 var key1Size = StringSizeOfKeyByHasher(itemInfo.StorageItemKey1Hasher);
                                 if (key1Size > 0)
                                 {
@@ -231,6 +230,82 @@ namespace JtonNetwork.ServiceLayer
                             break;
                     }
                 }
+            }
+        }
+
+        private string[] GetKeyParts(string key, Hasher[] hashers)
+        {
+            var keyHolder = key;
+
+            List<string> keys = new List<string>();
+            foreach(Hasher hasher in hashers)
+            {
+                keys.AddRange(GetKeyParts(keyHolder, hasher, out string leftOver));
+
+                // this situation isn't handled currently as types aren't exposed in the current substrate version,
+                // and we can't distinguish between key1 and key2 as key size not fix for those hashers.
+                if (leftOver == null)
+                {
+                    return new string[] { key };
+                }
+
+                keyHolder = leftOver;
+            }
+
+            return keys.ToArray();
+        }
+
+        private List<string> GetKeyParts(string key, Hasher hasher, out string leftOver)
+        {
+            leftOver = string.Empty;
+            switch (hasher)
+            {
+                case Hasher.BlakeTwo128:
+                    leftOver = key.Substring(32);
+                    return new List<string> { 
+                        key.Substring(0, 32),
+                        String.Empty
+                    };
+                case Hasher.BlakeTwo256:
+                    leftOver = key.Substring(64);
+                    return new List<string> { 
+                        key.Substring(0, 64),
+                        String.Empty
+                    };
+                case Hasher.BlakeTwo128Concat:
+                    leftOver = null;
+                    return new List<string> {
+                        key.Substring(0, 32),
+                        key.Substring(32)
+                    };
+                case Hasher.Twox128:
+                    leftOver = key.Substring(32);
+                    return new List<string> {
+                        key.Substring(0, 32),
+                        String.Empty
+                    };
+                case Hasher.Twox256:
+                    leftOver = key.Substring(64);
+                    return new List<string> {
+                        key.Substring(0, 64),
+                        String.Empty
+                    };
+                case Hasher.Twox64Concat:
+                    leftOver = null;
+                    return new List<string> {
+                        key.Substring(0, 16),
+                        key.Substring(16)
+                    };
+                case Hasher.Identity:
+                    leftOver = null;
+                    return new List<string> {
+                        key.Substring(0),
+                        String.Empty
+                    };
+
+                case Hasher.None:
+                default:
+                    throw new NotImplementedException();
             }
         }
 
